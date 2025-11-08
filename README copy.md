@@ -1,4 +1,4 @@
-# 🧬 BioTransformer: A Modular Transformer Framework for Biological Sequence Modeling
+#  BioTransformer: A Modular Transformer Framework for Biological Sequence Modeling
 
 **BioTransformer** is a flexible and extensible framework for building, training, and evaluating Transformer-based architectures on biological sequence data.  
 It enables researchers to easily specify and experiment with **different attention mechanisms** and **model configurations**, facilitating systematic exploration of sequence modeling approaches in bioinformatics.
