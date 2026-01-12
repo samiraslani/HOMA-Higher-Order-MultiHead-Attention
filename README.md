@@ -35,13 +35,6 @@ BioTransformer provides a rich suite of attention variants that can be specified
 
 ### 3D and Hybrid Attention Mechanisms
 - **3D Novel Attention** — a higher-order attention mechanism modeling tri-token (3-way) interactions across sequence dimensions.  
-- **3D Linformer Attention** — combines 3D attention with Linformer-style projection for efficiency.  
-- **3D Block Attention** — integrates 3D token interactions within localized blocks.  
-- **Multiped Linformer Attention** — a novel combination of Linformer and Block Attention for structured sparsity and efficiency.  
-- **Combined 2D and 3D Attentions** — merges planar and volumetric attention dynamics for richer representation.  
-- **Optimized Dot-Product with Overlapping Blocks & 3-Way Interaction Attention** —  
-  the top-performing configuration combining standard dot-product attention with overlapping local blocks and selective 3D token interactions, achieving high performance while significantly reducing computational complexity.
-
 ---
 
 ## Example Configuration
