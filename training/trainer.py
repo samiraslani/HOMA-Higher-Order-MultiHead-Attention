@@ -190,12 +190,16 @@ class Trainer:
                     print(f"  Tie U -> K        : yes (score = Q·K·K)")
                 if getattr(model.attn_cfg, "uniform_pool_3d", False):
                     print(f"  Triadic attention : UNIFORM POOL (ablation, no scores)")
+            if model.attn_cfg.type.lower() == "homa":
                 combine = getattr(model.attn_cfg, "combine", "fusion")
-                if combine != "fusion":
-                    detail = ("attn_2d + res_3d (no fusion MLP)" if combine == "add"
-                              else f"attn_2d + gate * res_3d (gate init "
-                                   f"{getattr(model.attn_cfg, 'gate_init', 1.0)})")
-                    print(f"  2D/3D combine     : {combine.upper()} (ablation) — {detail}")
+                gate_init = getattr(model.attn_cfg, "gate_init", 1.0)
+                detail = {
+                    "fusion": "concat -> MLP(2*head_dim -> 128 -> head_dim)",
+                    "add": "attn_2d + res_3d  (no fusion MLP)",
+                    "gated": f"attn_2d + gate * res_3d  (gate init {gate_init})",
+                }[combine]
+                suffix = "" if combine == "fusion" else "  [ablation]"
+                print(f"  2D/3D combine     : {combine}{suffix} — {detail}")
         print(f"  Device            : {self.device}")
         print(f"  Epochs            : {self.config.epochs}")
         print(f"  Learning rate     : {self.config.learning_rate}")
