@@ -107,6 +107,8 @@ def make_attn_cfg(attn_type: str, args: argparse.Namespace) -> AttentionConfig:
         linformer_k=args.linformer_k,
         window_size=args.window_size,
         rank_3d=args.rank_3d,
+        combine=getattr(args, "combine", "fusion"),
+        gate_init=getattr(args, "gate_init", 1.0),
     )
 
 
@@ -312,6 +314,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--linformer_k",  type=int,   default=50)
     parser.add_argument("--window_size",  type=int,   default=7)
     parser.add_argument("--rank_3d",      type=int,   default=8)
+    parser.add_argument("--combine", choices=("fusion", "add", "gated"), default="fusion",
+                        help="homa: how the 2D and 3D branches are merged. "
+                             "'fusion' = concat + MLP (published); 'add' = plain sum; "
+                             "'gated' = sum with one learnable scalar.")
+    parser.add_argument("--gate_init", type=float, default=1.0,
+                        help="init of the gate scalar when --combine gated "
+                             "(1.0 matches 'add'; 0.0 starts as the 2D branch alone)")
 
     # --- Training hyperparameters ---
     parser.add_argument("--epochs",       type=int,   default=20)

@@ -27,7 +27,10 @@ Transfer learning
 Pre-trained 2D weights (W_q, W_k, W_v) can be loaded from an existing
 checkpoint via ``load_pretrained_2d`` and optionally frozen, allowing the
 model to be initialised from a strong 2D baseline and to only train the 3D
-components (W_u_u, W_u_v, fusion_layer) from scratch.
+components (W_u_u, W_u_v, and the combination parameters — ``fusion_layer``
+when ``combine="fusion"``, ``gate`` when ``combine="gated"``, none when
+``combine="add"``) from scratch.  With ``combine="gated"`` and
+``gate_init=0.0`` the model starts out exactly equal to its 2D baseline.
 
 Mathematical formulation
 ------------------------
@@ -54,9 +57,24 @@ After head-splitting and block-extraction (all tensors: B × Blk × H × L_b × 
     V_paired[j, k] = V_local[j] ⊙ V_local[k]       shape (B Blk H L_b w w d_h)
     res_3d[i] = Σ_{j,k} attn_3d[i,j,k] · V_paired[j,k]
 
-  **Fusion:**
-    combined = cat([attn_2d, res_3d], dim=-1)       shape (B Blk H L_b 2·d_h)
-    out = MLP(combined)                              shape (B Blk H L_b d_h)
+  **Combination** (selected by ``combine``; both branches are
+  ``(B Blk H L_b d_h)``, so all three options are shape-compatible):
+
+    ``"fusion"`` (default, the published mechanism)
+      combined = cat([attn_2d, res_3d], dim=-1)     shape (B Blk H L_b 2·d_h)
+      out = MLP(combined)                           shape (B Blk H L_b d_h)
+
+    ``"add"``
+      out = attn_2d + res_3d                        (no parameters)
+
+    ``"gated"``
+      out = attn_2d + g · res_3d                    (g one learnable scalar)
+
+  The additive variants exist as ablations.  Because the fusion MLP can
+  rescale or discard either branch, it confounds "the triadic branch carries
+  no extra signal" with "the MLP learned to ignore it"; ``"add"`` fixes the
+  mixing weight at 1 so the triadic contribution is measured directly, and
+  ``"gated"`` exposes that weight as a single interpretable scalar per layer.
 
 Blocks are reconstructed and averaged back to the full sequence, followed by
 a final linear projection W_o.
@@ -106,6 +124,13 @@ class HOMA(AttentionBase):
             3D-specific parameters are updated during training.
         prefix_hint: Optional key prefix used when matching parameter names
             inside the checkpoint state-dict.
+        combine: How the 2D and 3D branch outputs are merged — ``"fusion"``
+            (concat + MLP, the published mechanism), ``"add"`` (plain sum,
+            no parameters), or ``"gated"`` (``attn_2d + gate · res_3d`` with
+            one learnable scalar).  Ablation knob; see module docstring.
+        gate_init: Initial value of ``gate`` when ``combine="gated"``.  The
+            default ``1.0`` starts identical to ``"add"``; ``0.0`` starts
+            identical to the 2D branch alone (useful with ``freeze_2d``).
     """
 
     def __init__(
@@ -122,8 +147,14 @@ class HOMA(AttentionBase):
         prefix_hint: str = "",
         tie_u_to_k: bool = False,
         uniform_pool_3d: bool = False,
+        combine: str = "fusion",
+        gate_init: float = 1.0,
     ) -> None:
         super().__init__(num_heads, d_model)
+        if combine not in ("fusion", "add", "gated"):
+            raise ValueError(
+                f"combine must be one of 'fusion', 'add', 'gated'; got {combine!r}"
+            )
         self.stride = stride
         self.block_size = block_size
         self.window_size = window_size
@@ -134,6 +165,8 @@ class HOMA(AttentionBase):
         # If True, ablate the triadic attention: replace softmax with a uniform
         # average over the window, keeping only the V⊙V value pooling.
         self.uniform_pool_3d = uniform_pool_3d
+        # How the 2D and 3D branches are merged: "fusion" (MLP), "add", "gated".
+        self.combine = combine
 
         # 2D projection matrices
         self.W_q = nn.Linear(d_model, d_model)
@@ -148,12 +181,17 @@ class HOMA(AttentionBase):
             self.W_u_u = nn.Linear(d_model, rank, bias=False)
             self.W_u_v = nn.Linear(rank, d_model, bias=False)
 
-        # Fusion MLP that combines 2D and 3D outputs
-        self.fusion_layer = nn.Sequential(
-            nn.Linear(2 * self.head_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, self.head_dim),
-        )
+        # Combination of the 2D and 3D outputs.  Only the selected variant's
+        # parameters are created, so "add" adds none and the ablations do not
+        # carry an unused fusion MLP in their parameter counts.
+        if combine == "fusion":
+            self.fusion_layer = nn.Sequential(
+                nn.Linear(2 * self.head_dim, 128),
+                nn.ReLU(),
+                nn.Linear(128, self.head_dim),
+            )
+        elif combine == "gated":
+            self.gate = nn.Parameter(torch.full((1,), float(gate_init)))
 
         if load_from_pretrained_2d:
             if pretrained_2d_ckpt is None:
@@ -382,9 +420,16 @@ class HOMA(AttentionBase):
         weighted_V = torch.matmul(attn_3d, V_local)          # (B, Blk, H, L_b, w, Dh)
         res_3d = (weighted_V * V_local).sum(dim=-2)          # (B, Blk, H, L_b, Dh)
 
-        # ---- Fusion -------------------------------------------------------
-        combined = torch.cat([attn_out_2d, res_3d], dim=-1)   # (B, Blk, H, L_b, 2·Dh)
-        out = self.fusion_layer(combined)                     # (B, Blk, H, L_b, Dh)
+        # ---- Combine the 2D and 3D branches -------------------------------
+        # Both branches are (B, Blk, H, L_b, Dh), so the additive variants need
+        # no reshaping and leave everything downstream unchanged.
+        if self.combine == "fusion":
+            combined = torch.cat([attn_out_2d, res_3d], dim=-1)  # (B, Blk, H, L_b, 2·Dh)
+            out = self.fusion_layer(combined)                    # (B, Blk, H, L_b, Dh)
+        elif self.combine == "gated":
+            out = attn_out_2d + self.gate * res_3d               # (B, Blk, H, L_b, Dh)
+        else:  # "add"
+            out = attn_out_2d + res_3d                           # (B, Blk, H, L_b, Dh)
         out = out.transpose(2, 3).contiguous().view(B2, Blk, L_b, self.d_model)
 
         # Reconstruct full sequence by averaging overlapping block outputs

@@ -211,6 +211,8 @@ class ProteinTransformer(nn.Module):
             rank=attn_cfg.rank_3d,
             tie_u_to_k=attn_cfg.tie_u_to_k,
             uniform_pool_3d=attn_cfg.uniform_pool_3d,
+            combine=attn_cfg.combine,
+            gate_init=attn_cfg.gate_init,
             load_from_pretrained_2d=(resolved_ckpt is not None),
             pretrained_2d_ckpt=resolved_ckpt,
             freeze_2d=attn_cfg.freeze_2d,
@@ -234,7 +236,11 @@ class ProteinTransformer(nn.Module):
         if resolved_ckpt is not None:
             print(f"  Transfer learning : blockwise 2D parameters (W_q, W_k, W_v) loaded from: {resolved_ckpt}")
         if attn_cfg.freeze_2d:
-            print("  Frozen layers     : W_q, W_k, W_v  (only W_u_u, W_u_v, fusion_layer will be trained)")
+            combine_params = {"fusion": "fusion_layer", "gated": "gate", "add": ""}[
+                attn_cfg.combine
+            ]
+            trainable = "W_u_u, W_u_v" + (f", {combine_params}" if combine_params else "")
+            print(f"  Frozen layers     : W_q, W_k, W_v  (only {trainable} will be trained)")
 
         # --- embeddings ---
         self.token_embedding = nn.Embedding(

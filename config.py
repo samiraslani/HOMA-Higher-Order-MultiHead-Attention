@@ -63,8 +63,14 @@ class AttentionConfig:
         pretrained_ckpt: Path to a checkpoint whose W_q/W_k/W_v weights are
             loaded into the 2D projections of homa.
         freeze_2d: If True, freeze the loaded 2D projection weights so only
-            the 3D-specific parameters (W_u_u, W_u_v, fusion_layer) are
-            trained.
+            the 3D-specific parameters (W_u_u, W_u_v, and whichever
+            combination parameters ``combine`` creates) are trained.
+        combine: How homa merges its 2D and 3D branches — ``"fusion"``
+            (concat + MLP, published), ``"add"`` (plain sum), or ``"gated"``
+            (sum with one learnable scalar).  Ablation knob: the fusion MLP
+            can rescale or discard a branch, so ``"add"`` / ``"gated"``
+            measure the triadic contribution without that confound.
+        gate_init: Initial value of the ``gated`` scalar.
     """
     type: str = "plain2d"
 
@@ -80,6 +86,15 @@ class AttentionConfig:
     rank_3d: int = 8
     tie_u_to_k: bool = False  # homa: reuse K as the third (U) factor -> score = Q·K·K (no separate U)
     uniform_pool_3d: bool = False  # homa: ablate triadic attention -> uniform V⊙V pooling (no scores)
+
+    # homa: how the 2D and 3D branch outputs are merged.  Both branches are
+    # head_dim-wide, so all three are shape-compatible drop-ins:
+    #   "fusion" — concat -> MLP(2*head_dim -> 128 -> head_dim)   [published]
+    #   "add"    — attn_2d + res_3d                               [no parameters]
+    #   "gated"  — attn_2d + gate * res_3d, gate a learnable scalar
+    combine: str = "fusion"
+    gate_init: float = 1.0  # init of `gate` when combine="gated" (1.0 == "add";
+                            # 0.0 starts identical to the 2D branch alone)
 
     # Transfer-learning for homa
     pretrained_ckpt: Optional[str] = None

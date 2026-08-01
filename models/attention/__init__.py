@@ -73,6 +73,8 @@ def get_attention(attn_type: str, **kwargs: Any):
             prefix_hint=kwargs.get("prefix_hint", ""),
             tie_u_to_k=kwargs.get("tie_u_to_k", False),
             uniform_pool_3d=kwargs.get("uniform_pool_3d", False),
+            combine=kwargs.get("combine", "fusion"),
+            gate_init=kwargs.get("gate_init", 1.0),
         )
 
     if attn_type == "blockwise3d":
