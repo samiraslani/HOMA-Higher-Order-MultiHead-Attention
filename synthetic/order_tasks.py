@@ -217,6 +217,19 @@ def build_model(mech: str, d_model: int, heads: int, L: int, window: int,
         if mech == "homa":
             return a3.HOMA(heads, d_model, stride=stride, block_size=L,
                            window_size=window, rank=rank)
+        if mech == "homa_add":
+            # HOMA with the fusion MLP replaced by a plain sum of the two
+            # branches.  This is the control that keeps the comparison honest:
+            # the published fusion layer is Linear -> ReLU -> Linear, an
+            # internal MLP that no other mechanism here has.  TinyModel omits
+            # the feed-forward sublayer precisely so that attention is the only
+            # nonlinear stage, so with "fusion" HOMA carries a nonlinearity its
+            # baselines lack -- 3,208 parameters per layer at d_model=32, and
+            # twelve of them in a twelve-layer stack.  Any advantage could then
+            # be that MLP rather than the fusion of interaction orders.
+            # "add" is parameter-matched to Blockwise-3D exactly.
+            return a3.HOMA(heads, d_model, stride=stride, block_size=L,
+                           window_size=window, rank=rank, combine="add")
         raise ValueError(f"unknown mechanism {mech!r}")
 
     return TinyModel([one() for _ in range(n_layers)], d_model, L,
