@@ -8,12 +8,14 @@ import logging
 from typing import Any
 
 from .attention_2d import Attn2DBlockwise, Attn2DLinformer, MultiHeadAttn2D
-from .attention_3d import HOMA, MultiHeadAttn3D
+from .attention_3d import HOMA, MultiHeadAttn3D, MultiHeadAttn3DPlain
 
 logger = logging.getLogger(__name__)
 
 # Supported attention type strings
-_ATTENTION_TYPES = ("plain2d", "blockwise2d", "linformer2d", "homa", "blockwise3d")
+_ATTENTION_TYPES = (
+    "plain2d", "blockwise2d", "linformer2d", "homa", "blockwise3d", "plain3d",
+)
 
 
 def get_attention(attn_type: str, **kwargs: Any):
@@ -21,7 +23,7 @@ def get_attention(attn_type: str, **kwargs: Any):
 
     Args:
         attn_type: One of ``"plain2d"``, ``"blockwise2d"``, ``"linformer2d"``,
-            ``"homa"``, or ``"blockwise3d"``.
+            ``"homa"``, ``"blockwise3d"``, or ``"plain3d"``.
         **kwargs: Parameters forwarded to the attention constructor.  Common
             keys: ``num_heads``, ``d_model``, ``len_seq``, ``block_size``,
             ``stride``, ``linformer_k`` (mapped to ``k``), ``window_size``,
@@ -87,6 +89,14 @@ def get_attention(attn_type: str, **kwargs: Any):
             rank=kwargs.get("rank", kwargs.get("rank_3d", 8)),
         )
 
+    if attn_type == "plain3d":
+        # Dense triadic attention: no blocks, no window, full-rank W_l.  Takes
+        # no block_size/stride/window/rank -- it is the unrestricted operator.
+        return MultiHeadAttn3DPlain(
+            num_heads=kwargs["num_heads"],
+            d_model=kwargs["d_model"],
+        )
+
     raise ValueError(
         f"Unknown attention type: '{attn_type}'. "
         f"Supported types: {_ATTENTION_TYPES}"
@@ -100,4 +110,5 @@ __all__ = [
     "Attn2DLinformer",
     "HOMA",
     "MultiHeadAttn3D",
+    "MultiHeadAttn3DPlain",
 ]

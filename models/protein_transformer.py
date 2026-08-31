@@ -308,6 +308,11 @@ class ProteinTransformer(nn.Module):
         if attn_type == "linformer2d":
             return mask.unsqueeze(1).unsqueeze(3)                  # (B, 1, L, 1)
 
+        if attn_type == "plain3d":
+            # Dense triadic attention is not blocked, and expands this to both
+            # the j and k axes of its (B, H, L, L, L) score tensor itself.
+            return mask                                            # (B, L)
+
         if attn_type == "blockwise2d":
             block_size = self.attn_cfg.block_size
             stride = self.attn_cfg.stride

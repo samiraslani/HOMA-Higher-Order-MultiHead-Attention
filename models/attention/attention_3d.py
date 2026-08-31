@@ -86,7 +86,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from .base import AttentionBase
+from .base import AttentionBase, softmax_nd
 
 logger = logging.getLogger(__name__)
 
@@ -646,3 +646,99 @@ class MultiHeadAttn3D(AttentionBase):
 
         out_full = self._reconstruct_from_blocks(out, L, self.stride)
         return self.W_o(out_full)
+
+
+class MultiHeadAttn3DPlain(AttentionBase):
+    """Plain (dense) triadic attention --- no blocking, no window, full-rank U.
+
+    This is the unrestricted third-order attention operator: the score tensor
+    covers **every** triple ``(i, j, k)`` in the sequence, and the third
+    projection ``W_l`` is a full ``d_model x d_model`` map rather than the
+    rank-``r`` factorisation used by :class:`MultiHeadAttn3D` and :class:`HOMA`.
+
+    It is the mechanism formalised as third-order tensor attention by Sanford
+    et al. (2023) and benchmarked as "third-order attention" by Kozachinskiy
+    et al. (2025), and it is the reference point against which our blocked,
+    windowed, low-rank variants should be read: those three restrictions are
+    what make the operator tractable on long sequences, and this class is what
+    they are restrictions *of*.
+
+    Mathematical formulation
+    ------------------------
+    With ``Q = X W_q``, ``K = X W_k``, ``L = X W_l``, ``V = X W_v`` split into
+    ``H`` heads of width ``d_h``::
+
+        S[i,j,k] = (1 / sqrt(d_h)) * sum_c Q[i,c] K[j,c] L[k,c]
+        A[i,j,k] = softmax over the (j, k) axes jointly
+        O[i]     = sum_{j,k} A[i,j,k] * (V[j] (*) V[k])
+
+    where ``(*)`` is the elementwise (Hadamard) product.
+
+    Cost
+    ----
+    ``O(L^3 d_h)`` compute and ``O(L^3)`` storage per head --- cubic, which is
+    why the blocked and windowed variants exist.  Practical only for short
+    sequences; at ``L=16`` the score tensor is a few MB, at ``L=512`` it is not.
+
+    Note:
+        The padding mask is applied to **both** the ``j`` and ``k`` axes.  The
+        original BioTransformer implementation masked only the last axis, which
+        leaves padded positions contributing through ``j``.
+
+    Args:
+        num_heads: Number of attention heads.
+        d_model: Model dimension; must be divisible by ``num_heads``.
+    """
+
+    def __init__(self, num_heads: int, d_model: int) -> None:
+        super().__init__(num_heads, d_model)
+        self.W_q = nn.Linear(d_model, d_model)
+        self.W_k = nn.Linear(d_model, d_model)
+        self.W_l = nn.Linear(d_model, d_model)
+        self.W_v = nn.Linear(d_model, d_model)
+        self.W_o = nn.Linear(d_model, d_model)
+
+    def forward(
+        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """Compute dense triadic attention.
+
+        Args:
+            x: Input sequence ``(B, L, d_model)``.
+            mask: Optional padding mask.  Either ``(B, L)`` with 1/True marking
+                valid positions --- in which case it is applied symmetrically to
+                the ``j`` and ``k`` axes --- or a tensor already broadcastable to
+                the ``(B, H, L, L, L)`` score tensor.
+
+        Returns:
+            Output sequence ``(B, L, d_model)``.
+        """
+        B, L, _ = x.shape
+
+        Q = self._split_heads(self.W_q(x))          # (B, H, L, Dh)
+        K = self._split_heads(self.W_k(x))
+        L_m = self._split_heads(self.W_l(x))
+        V = self._split_heads(self.W_v(x))
+
+        # Trilinear scores over every (j, k) pair: (B, H, L, L, L)
+        scores = torch.einsum("bhid,bhjd,bhkd->bhijk", Q, K, L_m) / (
+            self.head_dim ** 0.5
+        )
+
+        if mask is not None:
+            if mask.dim() == 2:                     # (B, L) key-padding mask
+                m = mask.bool()
+                keep = m[:, None, None, None, :] & m[:, None, None, :, None]
+                scores = scores.masked_fill(~keep, -1e9)
+            else:
+                scores = scores.masked_fill(mask == 0, -1e9)
+
+        # Joint softmax over the (j, k) axes
+        attn = softmax_nd(scores, dim=(-1, -2))
+
+        # sum_{j,k} A[i,j,k] * (V[j] (*) V[k]), without materialising V (x) V
+        weighted = torch.matmul(attn, V.unsqueeze(2))     # sum over k
+        out = (weighted * V.unsqueeze(2)).sum(dim=3)      # times V[j], sum over j
+
+        out = out.transpose(1, 2).contiguous().view(B, L, self.d_model)
+        return self.W_o(out)

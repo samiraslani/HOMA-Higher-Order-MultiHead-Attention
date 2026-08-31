@@ -48,6 +48,11 @@ class AttentionConfig:
         Sliding-window 2D attention (block_size, stride).
     ``"linformer2d"``
         Low-rank 2D attention (linformer_k, max_seq_length from ModelConfig).
+    ``"plain3d"``
+        Dense triadic attention: every (i, j, k) triple, full-rank third
+        projection, no blocking or windowing.  The unrestricted operator that
+        ``"blockwise3d"`` and ``"homa"`` are tractable restrictions of.  Cubic
+        in sequence length, so practical only for short sequences.
     ``"homa"``  ← **main contribution**
         HOMA (Higher-Order MultiHead Attention) with low-rank U-matrix and optional
         pretrained-2D transfer (block_size, stride, window_size, rank_3d,

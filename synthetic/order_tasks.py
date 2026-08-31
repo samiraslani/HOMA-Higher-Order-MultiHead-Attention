@@ -230,6 +230,15 @@ def build_model(mech: str, d_model: int, heads: int, L: int, window: int,
             # "add" is parameter-matched to Blockwise-3D exactly.
             return a3.HOMA(heads, d_model, stride=stride, block_size=L,
                            window_size=window, rank=rank, combine="add")
+        if mech == "plain3d":
+            # Dense triadic attention: every (j, k) pair, full-rank third
+            # projection, no blocking or windowing.  This is the unrestricted
+            # operator that "blockwise3d" restricts; at L=16 the score tensor is
+            # a few MB, so the cubic cost is not a constraint here.  Note it is
+            # NOT parameter-matched to blockwise3d -- the full d x d W_l costs
+            # more than the rank-r factorisation -- so a win over blockwise3d is
+            # "the unrestricted operator does better", not "the window hurt".
+            return a3.MultiHeadAttn3DPlain(heads, d_model)
         raise ValueError(f"unknown mechanism {mech!r}")
 
     return TinyModel([one() for _ in range(n_layers)], d_model, L,
